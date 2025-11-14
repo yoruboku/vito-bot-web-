@@ -1,72 +1,139 @@
 import discord
 import asyncio
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
-DISCORD_TOKEN = "MTQzODY2MDE3NzU1NjY2ODUxNw.GrTlIq.LXSO1RXpXOGsOY8ZyxoFQuT_EztdUwE5D9iBmA"
-BOT_ID = "1438660177556668517"   # for example: 123456789012345678
+DISCORD_TOKEN = "MTQzODY2MDE3NzU1NjY2ODUxNw.GLgKGo.EKghT6qMAjdEQeutG9mpsr25BUvXPTKAvNWNcA"
+BOT_ID = "1438660177556668517"
 
 intents = discord.Intents.default()
-intents.message_content = True   # REQUIRED for reading messages
-intents.messages = True          # optional but recommended
-
+intents.message_content = True
 client = discord.Client(intents=intents)
 
 browser_context = None
-page = None
+user_pages = {}         # user_id -> Gemini page
+task_queue = asyncio.Queue()
 
-async def init_gemini(playwright):
-    global browser_context, page
+INPUT_SELECTOR = "div[contenteditable='true']"
+RESPONSE_SELECTOR = "div.markdown"
+
+
+# ---------------------------------------------------------
+# INITIALIZE PLAYWRIGHT + PERSISTENT BROWSER
+# ---------------------------------------------------------
+async def init_browser(playwright):
+    global browser_context
 
     browser_context = await playwright.chromium.launch_persistent_context(
-        user_data_dir="playwright_data",  # saved login session
+        "playwright_data",
         headless=True
     )
+
+
+async def get_user_page(user_id):
+    """Each user gets their own Gemini chat tab."""
+    global user_pages
+
+    if user_id in user_pages:
+        return user_pages[user_id]
+
     page = await browser_context.new_page()
-
     await page.goto("https://gemini.google.com/")
-    await page.wait_for_selector("textarea[aria-label='Message Gemini']")
+    await page.wait_for_selector(INPUT_SELECTOR, timeout=60000)
 
-async def ask_gemini(question):
-    await page.fill("textarea[aria-label='Message Gemini']", question)
+    user_pages[user_id] = page
+    return page
+
+
+# ---------------------------------------------------------
+# GEMINI ASK FUNCTION
+# ---------------------------------------------------------
+async def ask_gemini(page, question):
+    # click + type into the input
+    await page.click(INPUT_SELECTOR)
+    await page.fill(INPUT_SELECTOR, question)
     await page.keyboard.press("Enter")
 
-    # wait for Gemini to respond
-    await page.wait_for_selector("div.markdown", timeout=45000)
+    # wait for answer OR detect error
+    try:
+        await page.wait_for_selector(RESPONSE_SELECTOR, timeout=60000)
+    except PlaywrightTimeout:
+        return "Gemini did not respond in time. Might be rate-limited."
 
-    answers = await page.query_selector_all("div.markdown")
+    # detect “Try again” or rate limit messages
+    try_again = await page.query_selector("button:has-text('Try again')")
+    over_limit = await page.query_selector("text=limit")
+    error_box = await page.query_selector("text=Something went wrong")
+
+    if try_again:
+        return "Gemini shows a 'Try Again' button. Probably rate-limited."
+
+    if over_limit:
+        return "Gemini usage limit reached."
+
+    if error_box:
+        return "Gemini had an error."
+
+    # otherwise return latest markdown response
+    answers = await page.query_selector_all(RESPONSE_SELECTOR)
     return await answers[-1].inner_text()
 
+
+# ---------------------------------------------------------
+# QUEUE WORKER (so only one browser task runs at a time)
+# ---------------------------------------------------------
+async def worker():
+    while True:
+        user_id, question, channel, thinking_msg = await task_queue.get()
+        try:
+            page = await get_user_page(user_id)
+            answer = await ask_gemini(page, question)
+            await thinking_msg.delete()
+            await channel.send(answer)
+        except Exception as e:
+            await thinking_msg.delete()
+            await channel.send(f"Error: {e}")
+        finally:
+            task_queue.task_done()
+
+
+# ---------------------------------------------------------
+# DISCORD EVENTS
+# ---------------------------------------------------------
 @client.event
 async def on_ready():
     print(f"zom is alive as {client.user}")
 
-    # launch Gemini in the background
     asyncio.create_task(start_playwright())
+    asyncio.create_task(worker())
 
-async def start_playwright():
-    async with async_playwright() as playwright:
-        await init_gemini(playwright)
-        while True:
-            await asyncio.sleep(1)  # keep browser running
 
 @client.event
 async def on_message(message):
     if message.author == client.user:
         return
 
-    # check if zom is mentioned
     if f"<@{BOT_ID}>" in message.content:
         question = message.content.split(">", 1)[1].strip()
-        if not question:
-            await message.channel.send("Ask me something.")
-            return
 
-        await message.channel.send("🧠 Thinking…")
+        thinking_msg = await message.channel.send("🧠 Thinking…")
 
-        try:
-            answer = await ask_gemini(question)
-            await message.channel.send(answer)
-        except Exception as e:
-            await message.channel.send(f"Error: {e}")
+        await task_queue.put((
+            message.author.id,
+            question,
+            message.channel,
+            thinking_msg
+        ))
+
+
+# ---------------------------------------------------------
+# PLAYWRIGHT STARTUP
+# ---------------------------------------------------------
+async def start_playwright():
+    async with async_playwright() as pw:
+        await init_browser(pw)
+        while True:
+            await asyncio.sleep(1)
+
 
 client.run(DISCORD_TOKEN)
+
