@@ -1,7 +1,7 @@
 # Colors (using Write-Host with -ForegroundColor)
 Write-Host "#########################################" -ForegroundColor Cyan
 Write-Host "#                                       #" -ForegroundColor Cyan
-Write-Host "#         BOKU AIDC - Installer         #" -ForegroundColor Cyan
+Write-Host "#         VITO - Installer              #" -ForegroundColor Cyan
 Write-Host "#                                       #" -ForegroundColor Cyan
 Write-Host "#########################################" -ForegroundColor Cyan
 
@@ -15,7 +15,7 @@ if (Test-Path "venv" -and Test-Path ".env") {
     pip install -r requirements.txt
     playwright install chromium
     Write-Host "Starting bot..." -ForegroundColor Green
-    python zom_bot.py
+    python main.py
     exit
 }
 
@@ -58,4 +58,4 @@ EOF
 
 # Step 5: Start bot
 Write-Host "Starting BOKU AIDC Bot..." -ForegroundColor Green
-python zom_bot.py
+python main.py
