@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "=== AIDC-Bot Updater ==="
+echo "=== Vito-Bot Updater ==="
 
 if [ ! -d "venv" ]; then
     echo "No installation found. Run unified_install.sh first."
@@ -18,4 +18,4 @@ echo "Updating repository..."
 git pull
 
 echo "Starting bot..."
-python3 zom_bot.py
+python3 main.py
