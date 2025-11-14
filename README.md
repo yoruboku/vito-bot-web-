@@ -50,7 +50,7 @@ cd vito-bot
 
 ### 2️⃣ Run the Installer
 
-#### Linux / macOS / Termux
+#### Linux / macOS
 
 ```bash
 chmod +x unified_install.sh
