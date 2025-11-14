@@ -1,4 +1,4 @@
-# omen AIDC - Discord AI Bot
+# 🌌 Discord AI Web Bot
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Playwright](https://img.shields.io/badge/playwright-1.44.0-brightgreen.svg)](https://playwright.dev/)
@@ -11,8 +11,8 @@
 
 ## ✨ Overview
 
-**Omen AIDC** is a sleek self-hosted Discord AI bot powered by **Google Gemini** via Playwright.
-It intelligently answers questions in your server when mentioned (`@zom`), supports **per-user sessions**, **new chat commands**, and **rate-limit management**.
+**Vito** is a sleek self-hosted Discord AI bot powered by **Google Gemini** via Playwright.
+It intelligently answers questions in your server when mentioned, supports **per-user sessions**, **new chat commands**, and **rate-limit management**.
 
 > ⚠️ Gemini's UI may change over time, potentially breaking functionality. Use responsibly.
 
@@ -20,13 +20,13 @@ It intelligently answers questions in your server when mentioned (`@zom`), suppo
 
 ## 💡 Features
 
-* 🚀 **Mention-Based:** Responds only when mentioned (`@zom`)
+* 🚀 **Mention-Based:** Responds only when mentioned
 * 🧩 **Per-User Sessions:** Independent, persistent chats per user
-* 🔄 **New Chat Commands:** `/newchat` to reset conversation context
+* 🔄 **New Chat Commands:** Reset conversation context easily
 * 📝 **Queued Requests:** Prevents browser conflicts and rate-limit issues
 * 🔐 **Persistent Login:** Saves your Gemini session for hassle-free logins
 * ⚠️ **Error Handling:** Detects rate limits and retry prompts
-* 💻 **Cross-Platform Installer:** Automated setup for Linux, macOS, Windows, and Termux
+* 💻 **Cross-Platform Installer:** Automated setup for Linux, macOS and windows.
 
 ---
 
@@ -44,8 +44,8 @@ It intelligently answers questions in your server when mentioned (`@zom`), suppo
 ### 1️⃣ Clone the Repository
 
 ```bash
-git clone https://github.com/yoruboku/aidc-bot.git
-cd aidc-bot
+git clone https://github.com/yoruboku/vito-bot.git
+cd vito-bot
 ```
 
 ### 2️⃣ Run the Installer
@@ -100,7 +100,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
 
 ```bash
 source venv/bin/activate
-python3 zom_bot.py
+python3 main.py
 ```
 
 #### Windows (PowerShell)
@@ -109,7 +109,7 @@ python3 zom_bot.py
 # Activate virtual environment
 .\venv\Scripts\Activate.ps1
 # Run bot
-python.exe zom_bot.py
+python.exe main.py
 ```
 
 ---
@@ -130,19 +130,19 @@ python.exe zom_bot.py
 **Ask a Question:**
 
 ```
-@zom What is the capital of Japan?
+@Vito What is the capital of Japan?
 ```
 
 **Start a New Chat:**
 
 ```
-@zom newchat
+@Vito newchat
 ```
 
 **New Chat with Prompt:**
 
 ```
-@zom newchat Tell me a story about a robot.
+@Vito newchat Tell me a story about a robot.
 ```
 
 ---
@@ -162,4 +162,4 @@ Contact: [omenboku@gmail.com](mailto:omenboku@gmail.com)
 
 ---
 
-Made with ❤️ and Python by **Omen**
+Made by python using yoruboku.
