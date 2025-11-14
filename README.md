@@ -1,5 +1,4 @@
-# ![BOKU AIDC](logo.svg) 
-YoruBoku AIDC - Discord AI Bot
+# omen AIDC - Discord AI Bot
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Playwright](https://img.shields.io/badge/playwright-1.44.0-brightgreen.svg)](https://playwright.dev/)
@@ -8,9 +7,11 @@ YoruBoku AIDC - Discord AI Bot
 
 ---
 
+![Logo](logo.svg)
+
 ## ✨ Overview
 
-**BOKU AIDC** is a sleek self-hosted Discord AI bot powered by **Google Gemini** via Playwright.
+**Omen AIDC** is a sleek self-hosted Discord AI bot powered by **Google Gemini** via Playwright.
 It intelligently answers questions in your server when mentioned (`@zom`), supports **per-user sessions**, **new chat commands**, and **rate-limit management**.
 
 > ⚠️ Gemini's UI may change over time, potentially breaking functionality. Use responsibly.
@@ -156,9 +157,9 @@ Discord Mention --> Bot Queue --> Playwright Browser --> Gemini UI Interaction -
 
 ## 📄 License
 
-MIT License © 2025 Yoruboku
+MIT License © 2025 YoruBoku
 Contact: [omenboku@gmail.com](mailto:omenboku@gmail.com)
 
 ---
 
-Made with ❤️ and Python by **BOKU**
+Made with ❤️ and Python by **Omen**
