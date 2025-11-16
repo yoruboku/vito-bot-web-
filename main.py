@@ -60,15 +60,50 @@ async def new_chat_for_user(user_id):
 # Ask Gemini
 # ---------------------------------------------
 async def ask_gemini(page, question):
+    # Type question
     await page.click(INPUT_SELECTOR)
     await page.fill(INPUT_SELECTOR, question)
     await page.keyboard.press("Enter")
 
+    # Wait for *any* markdown to appear
     try:
         await page.wait_for_selector(RESPONSE_SELECTOR, timeout=60000)
     except PlaywrightTimeout:
         return "Gemini did not respond in time."
 
+    # ⬇️ NEW: Wait until Gemini fully finishes generating
+    # Gemini shows a STOP button while generating.
+    # When the STOP button disappears and SEND button returns → finished.
+    while True:
+        stop_button = await page.query_selector("button[aria-label='Stop']")
+        if not stop_button:
+            # No stop button → generation finished
+            break
+        await asyncio.sleep(0.25)
+
+    # Extra safety: wait until text stops changing for 300ms
+    last_text = ""
+    stable_count = 0
+    while True:
+        answers = await page.query_selector_all(RESPONSE_SELECTOR)
+        if not answers:
+            break
+
+        text = await answers[-1].inner_text()
+
+        if text == last_text:
+            stable_count += 1
+        else:
+            stable_count = 0
+
+        last_text = text
+
+        if stable_count >= 3:  # ~300ms (0.1 * 3)
+            break
+
+        await asyncio.sleep(0.1)
+
+    # Detect rate-limit / retry UI
     try_again = await page.query_selector("button:has-text('Try again')")
     limit = await page.query_selector("text=limit")
     error_box = await page.query_selector("text=Something went wrong")
@@ -82,8 +117,10 @@ async def ask_gemini(page, question):
     if error_box:
         return "Gemini encountered an error."
 
+    # Return final cleaned answer
     answers = await page.query_selector_all(RESPONSE_SELECTOR)
     return await answers[-1].inner_text()
+
 
 # ---------------------------------------------
 # Queue Worker
