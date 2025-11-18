@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""
-VITO — Ultra-Optimized Discord → Gemini Web Automation Bot
-Target: VPS usage (headless) with maximum throughput & minimal latency.
-
-Features:
-- Per-user persistent chat pages (fast, isolated context memory)
-- Automatic queue processing
-- owner + priority privileges (yoruboku = absolute)
-- stop = global cancel, non-blocking, never freezes worker
-- newchat = resets only that user's context
-- ultra tuned message dispatch, polling, and stabilization
-
-DO NOT EDIT UNLESS YOU UNDERSTAND ASYNC, PLAYWRIGHT, AND STATE MACHINES.
-"""
-
 import os
 import asyncio
 import discord
