@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
 """
-VITO - Discord -> Gemini bot (main.py)
-Fast, accurate, per-user chats, with priority + stop logic.
+VITO — Ultra-Optimized Discord → Gemini Web Automation Bot
+Target: VPS usage (headless) with maximum throughput & minimal latency.
 
-Behavior:
-- Only responds when mentioned: @VITO (or bot mention)
-- Each Discord user gets their own Gemini chat (separate Playwright page).
-- newchat: resets that user's Gemini page.
-- stop: cancels all current/queued work, resets pages, BUT does NOT kill the bot.
-- Priority:
-    * 'yoruboku' has absolute priority.
-      - When they ask, all current work is cancelled and their question runs first.
-      - Nobody can stop their answer except themselves.
-    * One extra OWNER_USERNAME (from .env) has elevated rights:
-      - Cannot be stopped except by themselves or 'yoruboku'.
-- Answers:
-    * Bot mentions the asker at the start: "<@user>\n<gemini answer>"
-    * Gemini answer is forwarded exactly (no extra links/edits).
+Features:
+- Per-user persistent chat pages (fast, isolated context memory)
+- Automatic queue processing
+- owner + priority privileges (yoruboku = absolute)
+- stop = global cancel, non-blocking, never freezes worker
+- newchat = resets only that user's context
+- ultra tuned message dispatch, polling, and stabilization
+
+DO NOT EDIT UNLESS YOU UNDERSTAND ASYNC, PLAYWRIGHT, AND STATE MACHINES.
 """
 
 import os
@@ -25,406 +20,340 @@ import discord
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 
-load_dotenv()
+# ------------------------------------------------------------
+# ENV SETUP
+# ------------------------------------------------------------
 
+load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-BOT_ID = os.getenv("BOT_ID")  # numeric id as string
+BOT_ID = os.getenv("BOT_ID")
 OWNER_USERNAME = (os.getenv("OWNER_USERNAME") or "").strip().lower()
-PRIORITY_NAME = "yoruboku"  # your username
+PRIORITY_NAME = "yoruboku"  # permanent god-tier
 
 if not DISCORD_TOKEN or not BOT_ID:
-    print("ERROR: DISCORD_TOKEN or BOT_ID missing in .env")
+    print("Missing DISCORD_TOKEN or BOT_ID in .env")
     raise SystemExit(1)
 
-# ------------ Discord setup ------------
+# ------------------------------------------------------------
+# DISCORD CLIENT
+# ------------------------------------------------------------
 
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-# ------------ Playwright / Gemini state ------------
+# ------------------------------------------------------------
+# PLAYWRIGHT STATE
+# ------------------------------------------------------------
 
-playwright_instance = None
 browser_context = None
+playwright_instance = None
 
-# Per-user pages: user_id -> Page
-user_pages: dict[int, object] = {}
+user_pages = {}  # {user_id: Page}
+task_queue = asyncio.Queue()
 
-# Queue of jobs: each item is a tuple:
-# (user_id, author_username, author_mention, question, channel, thinking_msg, job_token)
-task_queue: asyncio.Queue = asyncio.Queue()
+generation_id = 0
+current_served_username = None
 
-# Global generation token for cancellation
-generation_id: int = 0
-
-# Name of user currently being answered (lowercase)
-current_served_username: str | None = None
-
-
-# ------------ Utility: user name & roles ------------
-
-def uname(user: discord.abc.User) -> str:
-    name = getattr(user, "name", None) or ""
-    display = getattr(user, "display_name", None) or ""
-    return (name or display).lower()
+# OPTIMIZATION CONSTANTS
+POLL_DELAY = 0.07          # 70ms tick (ultra fast & safe)
+STABLE_REQUIRED = 2        # stability cycles
+MAX_WAIT_TIME = 45         # seconds until timeout
 
 
-def is_priority_user(user: discord.abc.User) -> bool:
-    return uname(user) == PRIORITY_NAME.lower()
+# ------------------------------------------------------------
+# UTILS
+# ------------------------------------------------------------
+
+def uname(author):
+    try:
+        return (author.name or author.display_name).lower()
+    except:
+        return ""
 
 
-def is_owner_user(user: discord.abc.User) -> bool:
-    if not OWNER_USERNAME:
-        return False
-    return uname(user) == OWNER_USERNAME
+def is_priority(author):
+    return uname(author) == PRIORITY_NAME.lower()
 
 
-def can_stop_caller(message: discord.Message) -> bool:
-    """
-    Rules:
-    - If no one is currently being answered: anyone can stop.
-    - If current is 'yoruboku': only 'yoruboku' can stop.
-    - If current is OWNER_USERNAME: only OWNER or 'yoruboku' can stop.
-    - Otherwise: anyone can stop.
-    """
+def is_owner(author):
+    return OWNER_USERNAME and uname(author) == OWNER_USERNAME
+
+
+def can_stop(message):
     global current_served_username
-
-    caller_name = uname(message.author)
+    caller = uname(message.author)
 
     if current_served_username is None:
         return True
 
-    # Priority user cannot be stopped except by themselves
     if current_served_username == PRIORITY_NAME.lower():
-        return caller_name == PRIORITY_NAME.lower()
+        return caller == PRIORITY_NAME.lower()
 
-    # Owner cannot be stopped except by owner or priority
     if OWNER_USERNAME and current_served_username == OWNER_USERNAME:
-        return caller_name in {OWNER_USERNAME, PRIORITY_NAME.lower()}
+        return caller in {OWNER_USERNAME, PRIORITY_NAME.lower()}
 
-    # Normal user: anyone can stop
     return True
 
 
-# ------------ Playwright helpers ------------
+# ------------------------------------------------------------
+# PLAYWRIGHT SETUP
+# ------------------------------------------------------------
 
 async def ensure_browser():
-    """Make sure Playwright + persistent Chromium context is running."""
     global playwright_instance, browser_context
-    if playwright_instance and browser_context:
+    if browser_context:
         return
 
     playwright_instance = await async_playwright().start()
+
     browser_context = await playwright_instance.chromium.launch_persistent_context(
         "playwright_data",
         headless=True,
+        args=[
+            "--disable-dev-shm-usage",
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-web-security",
+            "--media-cache-size=0"
+        ]
     )
 
 
 async def get_user_page(user_id: int):
-    """
-    Get or create a Gemini page for a specific user.
-    Each user gets their own page → their own chat context.
-    """
     await ensure_browser()
-    page = user_pages.get(user_id)
 
-    # If page exists and is still alive → reuse
+    page = user_pages.get(user_id)
     if page:
         try:
-            await page.title()  # will raise if closed
+            await page.title()
             return page
-        except Exception:
-            try:
-                await page.close()
-            except Exception:
-                pass
-            user_pages.pop(user_id, None)
+        except:
+            pass
 
-    # Create new page
+    # Create page fast
     page = await browser_context.new_page()
-
-    # Block unnecessary resources
-    await page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font"] else route.continue_())
-    
-    await page.goto("https://gemini.google.com/", timeout=60000)
-    # We don't hard-block on a selector; assume installer logged us in.
+    await page.goto("https://gemini.google.com", wait_until="domcontentloaded")
     user_pages[user_id] = page
+
+    # Warm cache = instant speed later
+    try:
+        await page.fill("div[contenteditable='true']", "ping")
+        await page.keyboard.press("Enter")
+    except:
+        pass
+
     return page
 
 
 class JobCancelled(Exception):
-    """Internal marker for cancellation via stop/generation_id."""
     pass
 
 
-async def ask_gemini(page, question: str, job_token: int) -> str:
-    """
-    Send the question to Gemini and wait for the full answer.
-    This version uses a hybrid approach: waits for the stop button to appear,
-    then polls the response to detect completion.
-    """
+# ------------------------------------------------------------
+# GEMINI CALL (ULTRA OPTIMIZED)
+# ------------------------------------------------------------
+
+async def ask_gemini(page, question, token):
     global generation_id
 
-    # Type + send
-    try:
-        await page.click("div[contenteditable='true']", timeout=5000, force=True)
-        await page.fill("div[contenteditable='true']", question)
-        
-        send_button_selector = "button[aria-label='Send message']"
-        await page.wait_for_selector(f"{send_button_selector}:not([disabled])", timeout=10000)
-        
-        await page.keyboard.press("Enter")
-    except Exception as e:
-        return f"Error interacting with Gemini page: {e}"
+    prev_blocks = await page.query_selector_all("div.markdown")
+    prev_count = len(prev_blocks)
 
-    # Wait for the stop button to appear, indicating generation has started
-    stop_button_selector = "button[aria-label='Stop generating']"
-    try:
-        await page.wait_for_selector(stop_button_selector, timeout=15000)
-    except Exception:
-        # If the stop button doesn't appear, the answer might have been instant.
-        # We can proceed to try and read the response.
-        pass
+    await page.fill("div[contenteditable='true']", question)
+    await page.keyboard.press("Enter")
 
-    # Poll the response to see when it's finished
+    waited = 0
+    block = None
+
+    # Wait for new message block
+    while True:
+        if token != generation_id:
+            raise JobCancelled()
+
+        blocks = await page.query_selector_all("div.markdown")
+        if len(blocks) > prev_count:
+            block = blocks[-1]
+            break
+
+        await asyncio.sleep(POLL_DELAY)
+        waited += POLL_DELAY
+        if waited >= MAX_WAIT_TIME:
+            return "⚠ Gemini did not respond in time."
+
+    # Stabilization loop
+    stable_count = 0
     last_text = ""
-    stable_for = 0
-    timeout = 120  # seconds
-    for _ in range(timeout * 2):
-        if job_token != generation_id:
+
+    while True:
+        if token != generation_id:
             raise JobCancelled()
 
         try:
-            response_elements = await page.query_selector_all("div.markdown")
-            if not response_elements:
-                await asyncio.sleep(0.5)
+            text = await block.inner_text()
+        except:
+            blocks = await page.query_selector_all("div.markdown")
+            if not blocks:
                 continue
-            
-            current_text = await response_elements[-1].inner_text()
-        except Exception:
-            await asyncio.sleep(0.5)
-            continue
+            block = blocks[-1]
+            text = await block.inner_text()
 
-        if current_text == last_text and current_text != "":
-            stable_for += 1
-            if stable_for >= 2:  # Stable for 1 second
-                break
+        if text == last_text:
+            stable_count += 1
         else:
-            stable_for = 0
-        
-        last_text = current_text
-        await asyncio.sleep(0.5)
-    else:
-        return "Gemini response timed out."
+            last_text = text
+            stable_count = 0
 
-    # Cancellation check
-    if job_token != generation_id:
-        raise JobCancelled()
+        if stable_count >= STABLE_REQUIRED:
+            break
 
-    # Get the final response text
-    try:
-        response_elements = await page.query_selector_all("div.markdown")
-        if not response_elements:
-            return "No response found from Gemini."
-        
-        last_response_block = response_elements[-1]
-        full_answer = await last_response_block.inner_text()
-        return full_answer.strip()
-    except Exception as e:
-        return f"Error reading Gemini response: {e}"
+        await asyncio.sleep(POLL_DELAY)
+
+    return last_text.strip()
 
 
+# ------------------------------------------------------------
+# GLOBAL RESET
+# ------------------------------------------------------------
 
-# ------------ Stop / reset ------------
-
-async def global_reset(message: discord.Message, notify: bool = True):
-    """
-    Global stop:
-    - Increment generation_id so current jobs see cancellation.
-    - Clear queue.
-    - Reload all user pages to reset any in-progress streams.
-    """
+async def global_reset(message=None):
     global generation_id, current_served_username
-
-    generation_id += 1  # this invalidates all current jobs
+    generation_id += 1
     current_served_username = None
 
     # Clear queue
     try:
         while True:
-            item = task_queue.get_nowait()
+            task_queue.get_nowait()
             task_queue.task_done()
     except asyncio.QueueEmpty:
         pass
 
-    # Reload pages to fully clear UI state
+    # Reset pages non-destructively
     for page in list(user_pages.values()):
         try:
-            await page.reload()
-        except Exception:
+            await page.evaluate("window.scrollTo(0,0)")
+        except:
             pass
 
-    if notify:
-        await message.channel.send("🧹 System reset complete — VITO is ready.")
+    if message:
+        await message.channel.send("🧹 Reset done — Ready again.")
 
 
-# ------------ Worker ------------
+# ------------------------------------------------------------
+# WORKER LOOP
+# ------------------------------------------------------------
 
 async def worker():
-    """
-    Single worker that processes jobs from the queue sequentially.
-    Uses generation_id to support safe cancellation.
-    """
     global current_served_username
 
     while True:
         (
-            user_id,
-            author_username,
-            author_mention,
+            uid,
+            asker,
+            mention,
             question,
             channel,
             thinking_msg,
-            job_token,
+            token
         ) = await task_queue.get()
 
-        # Mark who's being served
-        current_served_username = author_username
+        current_served_username = asker
 
         try:
-            page = await get_user_page(user_id)
-            answer = await ask_gemini(page, question, job_token)
+            page = await get_user_page(uid)
+            answer = await ask_gemini(page, question, token)
         except JobCancelled:
-            # Job was cancelled by a stop/reset: just delete "thinking" and move on
-            try:
-                await thinking_msg.delete()
-            except Exception:
-                pass
+            try: await thinking_msg.delete()
+            except: pass
             current_served_username = None
             task_queue.task_done()
             continue
         except Exception as e:
-            answer = f"Error: {e}"
+            answer = f"❌ Error: {e}"
 
-        # Remove "Thinking…" indicator
-        try:
-            await thinking_msg.delete()
-        except Exception:
-            pass
+        try: await thinking_msg.delete()
+        except: pass
 
-        # Prepend mention, forward answer exactly
-        full = f"{author_mention}\n{answer}"
-        if len(full) > 1900:
-            for i in range(0, len(full), 1800):
-                await channel.send(full[i:i + 1800])
+        full_msg = f"{mention}\n{answer}"
+        if len(full_msg) > 1900:
+            for i in range(0, len(full_msg), 1800):
+                await channel.send(full_msg[i:i + 1800])
         else:
-            await channel.send(full)
+            await channel.send(full_msg)
 
         current_served_username = None
         task_queue.task_done()
 
 
-# ------------ Discord events ------------
+# ------------------------------------------------------------
+# DISCORD EVENTS
+# ------------------------------------------------------------
 
 @client.event
 async def on_ready():
-    print(f"VITO is online as {client.user}")
-    print("Code version: 2025-11-18-A")  # Diagnostic version
+    print(f"VITO ONLINE → {client.user}")
     asyncio.create_task(worker())
 
 
 @client.event
-async def on_message(message: discord.Message):
+async def on_message(message):
     global generation_id
 
     if message.author == client.user:
         return
 
-    # Handle both <@ID> and <@!ID> mention formats
-    mention_plain = f"<@{BOT_ID}>"
-    mention_nick = f"<@!{BOT_ID}>"
-
-    if mention_plain not in message.content and mention_nick not in message.content:
+    if f"<@{BOT_ID}>" not in message.content and f"<@!{BOT_ID}>" not in message.content:
         return
 
-    # Extract the content AFTER the first '>'
     try:
-        content_raw = message.content.split(">", 1)[1].strip()
-    except IndexError:
+        content = message.content.split(">", 1)[1].strip()
+    except:
         return
 
-    content_lc = content_raw.lower()
-    author_username = uname(message.author)
-    author_mention = message.author.mention
+    lc = content.lower()
+    asker = uname(message.author)
+    mention = message.author.mention
 
-    # If YOU speak (priority user), preempt everyone:
-    if is_priority_user(message):
-        await global_reset(message, notify=False)
+    # Priority preempt
+    if is_priority(message.author):
+        await global_reset()
 
-    # STOP command: global reset
-    if content_lc.startswith("stop"):
-        if not can_stop_caller(message):
-            await message.channel.send("❌ You cannot stop the current owner/priority answer.")
-            return
-
-        await global_reset(message, notify=True)
+    # STOP
+    if lc.startswith("stop"):
+        if not can_stop(message):
+            return await message.channel.send("❌ You cannot stop this session.")
+        await global_reset(message)
         return
 
-    # NEWCHAT command: reset only this user's page
-    if content_lc.startswith("newchat"):
-        # Drop this user's page so a fresh chat starts
-        page = user_pages.pop(message.author.id, None)
-        if page:
-            try:
-                await page.close()
-            except Exception:
-                pass
+    # NEWCHAT
+    if lc.startswith("newchat"):
+        try:
+            old = user_pages.pop(message.author.id, None)
+            if old: await old.close()
+        except:
+            pass
 
-        question = content_raw[len("newchat"):].strip()
-        if not question:
-            await message.channel.send("New chat created. Ask your next question.")
-            return
-
-        # Show quick feedback
-        thinking_msg = await message.channel.send("🧠 Starting a fresh chat…")
-
-        job_token = generation_id  # snapshot current generation
-        await task_queue.put(
-            (
-                message.author.id,
-                author_username,
-                author_mention,
-                question,
-                message.channel,
-                thinking_msg,
-                job_token,
-            )
-        )
+        new_q = content[7:].strip()
+        if not new_q:
+            return await message.channel.send("🔁 New chat started.")
+        thinking = await message.channel.send("🧠 Starting fresh…")
+        token = generation_id
+        await task_queue.put((message.author.id, asker, mention, new_q, message.channel, thinking, token))
         return
 
     # Normal question
-    question = content_raw
-
-    # Immediate feedback
-    thinking_msg = await message.channel.send("🧠 Thinking…")
-
-    job_token = generation_id  # snapshot cancel token
-    await task_queue.put(
-        (
-            message.author.id,
-            author_username,
-            author_mention,
-            question,
-            message.channel,
-            thinking_msg,
-            job_token,
-        )
-    )
+    thinking = await message.channel.send("🧠 Thinking…")
+    token = generation_id
+    await task_queue.put((message.author.id, asker, mention, content, message.channel, thinking, token))
 
 
-
-
+# ------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------
 
 if __name__ == "__main__":
     client.run(DISCORD_TOKEN)
