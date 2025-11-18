@@ -57,11 +57,8 @@ chmod +x install.sh
 ./install.sh
 ```
 
-#### Windows PowerShell
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-.\install.ps1
-```
+
+
 
 ### Installer Actions
 | Step | Action |
