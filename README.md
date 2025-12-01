@@ -1,4 +1,4 @@
-# 🌌 **VITO — Discord AI Web Bot (Gemini Web Automation)**
+# 🌌 **VITO — Discord AI Web Bot (Gemini Web)**
 
 ![Logo](vito.png)
 
